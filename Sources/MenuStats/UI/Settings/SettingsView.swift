@@ -343,63 +343,129 @@ struct ModuleSettings: View {
             SettingsSection(title: "Formato") {
                 Toggle("Formato 24 ore", isOn: $settings.use24Hour)
             }
+        case .network:
+            SettingsSection(title: "IP pubblico e VPN",
+                            footnote: "L'IP pubblico si legge da ipwho.is (e l'IPv4, se il Mac usa IPv6, da api4.ipify.org), gratuiti e senza account: MenuStats fa una richiesta solo quando la scheda Rete è aperta, al massimo ogni 5 minuti o quando cambiano rete o VPN. È spento finché non lo attivi. Lo stato della VPN e il suo IP si leggono sul Mac, senza richieste. Con una VPN attiva l'IP pubblico è quello d'uscita della VPN, e la bandiera accanto all'IP della VPN è quella del paese di quell'indirizzo: per mostrarla, a VPN attiva, MenuStats fa la stessa richiesta anche se l'IP pubblico è spento.") {
+                Toggle("Mostra l'IP pubblico", isOn: $settings.publicIPEnabled)
+                Toggle("Mostra la bandiera del paese", isOn: $settings.showCountryFlag).disabled(!settings.publicIPEnabled)
+                Toggle("Mostra anche l'IPv6", isOn: $settings.showIPv6).disabled(!settings.publicIPEnabled)
+                Toggle("Mostra se c'è una VPN e il suo IP", isOn: $settings.showVPN)
+                Toggle("Mostra la bandiera accanto all'IP della VPN", isOn: $settings.showVPNCountry).disabled(!settings.showVPN)
+            }
         case .weather:
-            WeatherPlaceSettings(settings: settings, weather: model.weather)
+            WeatherPlaceSettings(settings: settings, weather: model.weather, location: model.location)
         default:
             EmptyView()
         }
     }
 }
 
-/// Place search for the weather (Open-Meteo geocoding: only the typed text is sent).
+/// Where the weather comes from: a city searched by hand (Open-Meteo geocoding: only the typed text is sent) or the Mac's position.
 struct WeatherPlaceSettings: View {
     @ObservedObject var settings: Settings
     @ObservedObject var weather: WeatherService
+    @ObservedObject var location: LocationProvider
     @State private var query = ""
     @State private var results: [WeatherLocation] = []
     @State private var searching = false
 
     var body: some View {
-        SettingsSection(title: "Città", footnote: "I dati arrivano da Open-Meteo (gratuito, senza account). MenuStats invia solo il nome cercato e poi le coordinate della città scelta; con il modulo Meteo spento non fa nessuna richiesta.") {
-            if let place = settings.weatherLocation {
+        SettingsSection(title: "Posizione", footnote: footnote) {
+            Picker("Posizione", selection: $settings.weatherLocationMode) {
+                ForEach(WeatherLocationMode.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            if settings.weatherLocationMode == .automatic {
+                automatic
+            } else {
+                manual
+            }
+        }
+    }
+
+    private var footnote: String {
+        if settings.weatherLocationMode == .automatic {
+            return "MenuStats chiede a macOS dove ti trovi (precisione di circa 1 km) e ricava il nome della città con il servizio di Apple. A Open-Meteo vanno solo le coordinate arrotondate. Il rilevamento lavora solo con il modulo Meteo acceso e questa modalità scelta."
+        }
+        return "I dati arrivano da Open-Meteo (gratuito, senza account). MenuStats invia solo il nome cercato e poi le coordinate della città scelta; con il modulo Meteo spento non fa nessuna richiesta."
+    }
+
+    // MARK: - Automatic
+
+    @ViewBuilder private var automatic: some View {
+        if let place = location.place {
+            placeRow(place, trailing: AnyView(EmptyView()))
+        } else {
+            switch location.status {
+            case .denied:
                 HStack {
-                    Image(systemName: "location.fill").foregroundStyle(Palette.color(0))
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(place.name).font(.system(size: 13, weight: .semibold))
-                        if !place.detail.isEmpty { Text(place.detail).font(.system(size: 11)).foregroundStyle(.secondary) }
-                    }
+                    Image(systemName: "location.slash").foregroundStyle(.secondary)
+                    Text("MenuStats non può usare la posizione. Consentila nei Servizi di localizzazione.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
-                    if let report = weather.report {
-                        Image(systemName: report.condition.symbol).symbolRenderingMode(.multicolor)
-                        Text(Format.temperature(report.temperature)).monospacedDigit()
-                    }
-                    Button("Rimuovi") { settings.weatherLocation = nil }
+                    Button("Apri Impostazioni…") { SystemActions.openLocationSettings() }
+                }
+            case .failed:
+                HStack {
+                    Image(systemName: "location.slash").foregroundStyle(.secondary)
+                    Text("Posizione non disponibile al momento. Riprovo più tardi.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            default:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Rilevo la posizione…").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
-            HStack {
-                TextField("Cerca una città (es. Milano)", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(search)
-                Button("Cerca", action: search).disabled(query.trimmingCharacters(in: .whitespaces).count < 2)
-                if searching { ProgressView().controlSize(.small) }
-            }
-            ForEach(results) { place in
-                Button {
-                    settings.weatherLocation = place
-                    if !settings.isEnabled(.weather) { settings.setEnabled(.weather, true) }
-                    results = []
-                    query = ""
-                } label: {
-                    HStack {
-                        Text(place.name).font(.system(size: 12.5, weight: .medium))
-                        Text(place.detail).font(.system(size: 11)).foregroundStyle(.secondary)
-                        Spacer()
-                        Image(systemName: "plus.circle")
-                    }
-                    .contentShape(Rectangle())
+        }
+    }
+
+    // MARK: - Manual
+
+    @ViewBuilder private var manual: some View {
+        if let place = settings.weatherLocation {
+            placeRow(place, trailing: AnyView(Button("Rimuovi") { settings.weatherLocation = nil }))
+        }
+        HStack {
+            TextField("Cerca una città (es. Milano)", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(search)
+            Button("Cerca", action: search).disabled(query.trimmingCharacters(in: .whitespaces).count < 2)
+            if searching { ProgressView().controlSize(.small) }
+        }
+        ForEach(results) { place in
+            Button {
+                settings.weatherLocation = place
+                if !settings.isEnabled(.weather) { settings.setEnabled(.weather, true) }
+                results = []
+                query = ""
+            } label: {
+                HStack {
+                    Text(place.name).font(.system(size: 12.5, weight: .medium))
+                    Text(place.detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "plus.circle")
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func placeRow(_ place: WeatherLocation, trailing: AnyView) -> some View {
+        HStack {
+            Image(systemName: "location.fill").foregroundStyle(Palette.color(0))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(place.name).font(.system(size: 13, weight: .semibold))
+                if !place.detail.isEmpty { Text(place.detail).font(.system(size: 11)).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            if let report = weather.report {
+                Image(systemName: report.condition.symbol).symbolRenderingMode(.multicolor)
+                Text(Format.temperature(report.temperature)).monospacedDigit()
+            }
+            trailing
         }
     }
 

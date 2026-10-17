@@ -100,7 +100,7 @@ enum PanelSection: String, CaseIterable, Identifiable, Codable {
     case cpuChart, cpuCores, cpuLoad, cpuProcesses
     case memoryComposition, memoryCharts, memoryProcesses
     case diskVolumes, diskChart, diskProcesses
-    case networkChart, networkConnection, networkApps
+    case networkChart, networkConnection, networkPublic, networkApps
     case sensorsChart, sensorsFans, sensorsGrid
     case batteryCharts, batteryHealth, batteryPower, batteryControls
 
@@ -120,6 +120,7 @@ enum PanelSection: String, CaseIterable, Identifiable, Codable {
         case .diskProcesses: "Processi"
         case .networkChart: "Grafico traffico"
         case .networkConnection: "Connessione"
+        case .networkPublic: "IP pubblico e VPN"
         case .networkApps: "App (download + upload)"
         case .sensorsChart: "Grafico temperature"
         case .sensorsFans: "Ventole e alimentazione"
@@ -136,6 +137,7 @@ enum PanelSection: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .cpuProcesses, .memoryProcesses, .diskProcesses: "non elenca i processi"
         case .networkApps: "non avvia nettop"
+        case .networkPublic: "non cerca l'IP pubblico né la VPN"
         case .sensorsGrid: "non legge tutti i sensori né la GPU"
         case .diskVolumes: "non calcola lo spazio eliminabile"
         case .sensorsFans: "legge ventole e consumo più di rado"
@@ -148,7 +150,7 @@ enum PanelSection: String, CaseIterable, Identifiable, Codable {
         case .cpuChart, .cpuCores, .cpuLoad, .cpuProcesses: .cpu
         case .memoryComposition, .memoryCharts, .memoryProcesses: .memory
         case .diskVolumes, .diskChart, .diskProcesses: .disk
-        case .networkChart, .networkConnection, .networkApps: .network
+        case .networkChart, .networkConnection, .networkPublic, .networkApps: .network
         case .sensorsChart, .sensorsFans, .sensorsGrid: .sensors
         case .batteryCharts, .batteryHealth, .batteryPower, .batteryControls: .battery
         }
@@ -226,6 +228,12 @@ enum WeatherStyle: String, StyleOption {
     var label: String { ["Icona e temperatura", "Solo temperatura", "Solo icona", "Città sopra la temperatura"][Self.allCases.firstIndex(of: self)!] }
 }
 
+/// Whether the weather place is typed by hand or found from the Mac's position.
+enum WeatherLocationMode: String, StyleOption {
+    case manual, automatic
+    var label: String { ["Manuale", "Automatica"][Self.allCases.firstIndex(of: self)!] }
+}
+
 /// The place the weather is shown for (chosen in Settings; only its coordinates are sent to Open-Meteo).
 struct WeatherLocation: Codable, Equatable, Identifiable {
     var name: String
@@ -270,6 +278,11 @@ final class Settings: ObservableObject {
     }
     @Published var processCount: Int { didSet { save(processCount, "processCount") } }
     @Published var groupProcessesByApp: Bool { didSet { save(groupProcessesByApp, "groupProcessesByApp") } }
+    @Published var publicIPEnabled: Bool { didSet { save(publicIPEnabled, "publicIPEnabled") } }
+    @Published var showVPNCountry: Bool { didSet { save(showVPNCountry, "showVPNCountry") } }
+    @Published var showIPv6: Bool { didSet { save(showIPv6, "showIPv6") } }
+    @Published var showCountryFlag: Bool { didSet { save(showCountryFlag, "showCountryFlag") } }
+    @Published var showVPN: Bool { didSet { save(showVPN, "showVPN") } }
     @Published var hiddenSections: Set<PanelSection> { didSet { save(hiddenSections.map(\.rawValue), "hiddenSections") } }
 
     // Menu bar modules
@@ -287,6 +300,7 @@ final class Settings: ObservableObject {
     @Published var dateStyle: DateStyle { didSet { save(dateStyle.rawValue, "dateStyle") } }
     @Published var use24Hour: Bool { didSet { save(use24Hour, "use24Hour") } }
     @Published var weatherStyle: WeatherStyle { didSet { save(weatherStyle.rawValue, "weatherStyle") } }
+    @Published var weatherLocationMode: WeatherLocationMode { didSet { save(weatherLocationMode.rawValue, "weatherLocationMode") } }
     @Published var weatherLocation: WeatherLocation? {
         didSet {
             if let weatherLocation, let data = try? JSONEncoder().encode(weatherLocation) {
@@ -333,6 +347,11 @@ final class Settings: ObservableObject {
         })
         processCount = defaults.object(forKey: "processCount") as? Int ?? 5
         groupProcessesByApp = bool("groupProcessesByApp", true)
+        publicIPEnabled = bool("publicIPEnabled", false)
+        showIPv6 = bool("showIPv6", true)
+        showVPNCountry = bool("showVPNCountry", true)
+        showCountryFlag = bool("showCountryFlag", true)
+        showVPN = bool("showVPN", true)
         hiddenSections = Set((defaults.stringArray(forKey: "hiddenSections") ?? []).compactMap(PanelSection.init(rawValue:)))
 
         let savedOrder = (defaults.stringArray(forKey: "moduleOrder") ?? []).compactMap(ModuleID.init(rawValue:))
@@ -350,6 +369,7 @@ final class Settings: ObservableObject {
         dateStyle = string("dateStyle", DateStyle.dayTime)
         use24Hour = bool("use24Hour", true)
         weatherStyle = string("weatherStyle", WeatherStyle.iconTemperature)
+        weatherLocationMode = string("weatherLocationMode", WeatherLocationMode.manual)
         weatherLocation = defaults.data(forKey: "weatherLocation").flatMap { try? JSONDecoder().decode(WeatherLocation.self, from: $0) }
 
         cpuBusyThreshold = double("cpuBusyThreshold", 0.8)

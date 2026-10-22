@@ -11,6 +11,7 @@ struct ProcessNetworkUsage {
 /// Started only while the network tab is visible, since it is the most expensive reader.
 final class NetworkProcessReader {
     private var task: Process?
+    private var output: FileHandle?
     private var pending = ""
     private var block: [String] = []
     private var previous: [String: (received: UInt64, sent: UInt64)] = [:]
@@ -34,18 +35,28 @@ final class NetworkProcessReader {
         task.standardError = FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            // Empty data means end of file (nettop quit or was stopped). The handler keeps firing at EOF, so
+            // without removing it this loop spins a whole core for as long as the app runs.
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            guard let text = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async { self?.consume(text) }
         }
         do {
             try task.run()
             self.task = task
+            output = pipe.fileHandleForReading
         } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
             NSLog("MenuStats: cannot start nettop: \(error.localizedDescription)")
         }
     }
 
     func stop() {
+        output?.readabilityHandler = nil
+        output = nil
         task?.terminate()
         task = nil
         previous = [:]

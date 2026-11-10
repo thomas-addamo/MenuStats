@@ -523,7 +523,7 @@ struct MenubarSettings: View {
                 Toggle("Mostra le etichette sopra i valori (CPU, MEM, …)", isOn: $settings.showLabels)
                 Toggle("Larghezza che si adatta al valore", isOn: $settings.menubarDynamicWidth)
                 Text(settings.menubarDynamicWidth
-                     ? "Ogni modulo occupa solo lo spazio che serve adesso: «5%» è più stretto di «100%». Quando il numero cresce, il modulo si allarga."
+                     ? "Ogni modulo occupa solo lo spazio che serve adesso: «5%» è più stretto di «100%». Quando il numero cresce, il modulo si allarga. La Rete tiene sempre lo spazio fisso: i suoi valori cambiano ogni secondo e sposterebbero la barra di continuo."
                      : "Ogni modulo tiene sempre lo spazio del valore più lungo (per esempio «100%»): niente si sposta, ma resta spazio vuoto.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {

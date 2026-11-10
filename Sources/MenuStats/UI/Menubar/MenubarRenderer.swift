@@ -149,11 +149,11 @@ enum MenubarRenderer {
     }
 
     private static func network(_ context: Context) -> MenubarSegment {
-        guard let network = context.snapshot.network else { return compose(.network, [.text("NET", "—", template: "999K")]) }
+        guard let network = context.snapshot.network else { return compose(.network, [.text("NET", "—", template: "999M")], fixedWidth: true) }
         let dynamic = context.options.dynamicIcons
         let offline = network.interface == nil
         if offline && dynamic {
-            return compose(.network, [.symbol("wifi.slash", size: 11), .text("NET", "OFF", template: "999K")])
+            return compose(.network, [.symbol("wifi.slash", size: 11), .text("NET", "OFF", template: "999M")], fixedWidth: true)
         }
         let uploading = network.uploadRate > 2_000, downloading = network.downloadRate > 2_000
         switch context.options.networkStyle {
@@ -161,22 +161,22 @@ enum MenubarRenderer {
             return compose(.network, [
                 .stacked(top: ("↑", Format.rate(network.uploadRate, compact: true), !dynamic || uploading),
                          bottom: ("↓", Format.rate(network.downloadRate, compact: true), !dynamic || downloading)),
-            ])
+            ], fixedWidth: true)
         case .download:
-            return compose(.network, [.text("↓ NET", Format.rate(network.downloadRate, compact: true), template: "999K",
-                                            emphasized: dynamic && downloading)])
+            return compose(.network, [.text("↓ NET", Format.rate(network.downloadRate, compact: true), template: "999M",
+                                            emphasized: dynamic && downloading)], fixedWidth: true)
         case .total:
             let total = network.uploadRate + network.downloadRate
-            return compose(.network, [.text("NET", Format.rate(total, compact: true), template: "999K",
-                                            emphasized: dynamic && (uploading || downloading))])
+            return compose(.network, [.text("NET", Format.rate(total, compact: true), template: "999M",
+                                            emphasized: dynamic && (uploading || downloading))], fixedWidth: true)
         case .graphs, .graphsValues:
             let options = context.options
             let graph = Part.dualGraph(top: context.recent(.netUp, 20), bottom: context.recent(.netDown, 20),
                                        topColor: options.graphColor(.upload), bottomColor: options.graphColor(.download),
                                        floor: 20_000, width: options.networkStyle == .graphs ? 40 : 30)
-            guard options.networkStyle == .graphsValues else { return compose(.network, [graph]) }
+            guard options.networkStyle == .graphsValues else { return compose(.network, [graph], fixedWidth: true) }
             return compose(.network, [graph, .stacked(top: ("↑", Format.rate(network.uploadRate, compact: true), !dynamic || uploading),
-                                                      bottom: ("↓", Format.rate(network.downloadRate, compact: true), !dynamic || downloading))])
+                                                      bottom: ("↓", Format.rate(network.downloadRate, compact: true), !dynamic || downloading))], fixedWidth: true)
         }
     }
 
@@ -419,10 +419,12 @@ enum MenubarRenderer {
         }
     }
 
-    private static func compose(_ module: ModuleID, _ parts: [Part]) -> MenubarSegment {
+    /// `fixedWidth` ignores "Larghezza che si adatta al valore": for values that change length every second
+    /// (network rates), where a width following the value would shift the whole menu bar all the time.
+    private static func compose(_ module: ModuleID, _ parts: [Part], fixedWidth: Bool = false) -> MenubarSegment {
         // Captured now: the image draws lazily, after other segments may have changed the statics.
         let labels = Self.showLabels
-        let dynamic = Self.dynamicWidth
+        let dynamic = Self.dynamicWidth && !fixedWidth
         let ink = Self.ink
         let widths = parts.map { width(of: $0, showLabels: labels, dynamic: dynamic) }
         let total = widths.reduce(0, +) + partGap * CGFloat(max(parts.count - 1, 0))
@@ -442,7 +444,8 @@ enum MenubarRenderer {
             return showLabels ? max(valueWidth, measure(label, labelFont)) : valueWidth
         case .stacked(let top, let bottom):
             let values = max(measure(top.1, stackFont), measure(bottom.1, stackFont))
-            let valueWidth = dynamic ? values : max(measure("999K", stackFont), values)
+            // "999M" is the widest rate Format.rate gives (M is wider than K).
+            let valueWidth = dynamic ? values : max(measure("999M", stackFont), values)
             let prefix = max(measure(top.0, stackFont), measure(bottom.0, stackFont))
             return (prefix > 0 ? prefix + 2 : 0) + valueWidth
         case .graph(_, let width): return width

@@ -108,10 +108,22 @@ struct DateTab: View {
                     .font(.system(size: 10.5)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if case .active(let active) = focusFilter.status, active.calendars != nil {
-                    Label("\(active.name): solo i calendari del suo filtro", systemImage: "moon.fill")
+                if case .active(let active) = focusFilter.status {
+                    if active.calendars != nil {
+                        Label("\(active.name): solo i calendari del suo filtro", systemImage: "moon.fill")
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Button { FocusCalendarFilter.openFocusSettings() } label: {
+                            Label("\(active.name) non ha un filtro Calendario su questo Mac: tutti i calendari restano visibili",
+                                  systemImage: "moon")
+                                .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
                         .font(.system(size: 10.5)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .help("Apri Impostazioni di Sistema ▸ Full immersion per aggiungere il filtro")
+                    }
                 }
             }
         case .notDetermined:

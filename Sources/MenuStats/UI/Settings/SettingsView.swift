@@ -998,7 +998,7 @@ struct CalendarSettings: View {
             let names = { (ids: Set<String>) in calendar.calendars.filter { ids.contains($0.id) }.map(\.title) }
             switch active.calendars {
             case nil:
-                return "\(active.name) è attiva, senza filtro Calendario: valgono i calendari scelti qui sopra."
+                return "\(active.name) è attiva ma su questo Mac non ha un filtro Calendario, quindi valgono i calendari scelti qui sopra. I filtri non passano da un dispositivo all'altro: se l'hai impostato sull'iPhone, aggiungilo anche qui con «Apri Full immersion…»."
             case .show(let ids)?:
                 let shown = names(ids)
                 return shown.isEmpty ? "\(active.name) è attiva: i calendari del suo filtro non sono su questo Mac."

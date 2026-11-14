@@ -685,6 +685,18 @@ struct ModuleSettings: View {
                 if !model.hardware.chargeLimitSupported { Text("Limite di carica non disponibile su questo Mac").foregroundStyle(.secondary) }
                 Button("Apri Impostazioni Batteria…") { SystemActions.openBatterySettings() }
             }
+            SettingsSection(title: "Avvisi dei dispositivi",
+                            footnote: "Quando colleghi AirPods, cuffie, una tastiera, un mouse o un controller, i moduli della barra si fanno da parte e al loro posto compare il dispositivo con la sua batteria (per gli AirPods ciascun auricolare e la custodia), come per gli impegni del calendario. Un clic apre la scheda Batteria. Un dispositivo che si scollega e ricollega entro un minuto e mezzo non viene annunciato di nuovo. La prima volta macOS chiede il permesso per il Bluetooth.") {
+                Toggle("Annuncia i dispositivi che si collegano", isOn: $settings.deviceAlerts)
+                Group {
+                    Picker("Durata dell'avviso", selection: $settings.deviceAlertSeconds) {
+                        ForEach([3, 4, 6, 8, 10, 15], id: \.self) { Text("\($0) secondi").tag($0) }
+                    }
+                    .frame(maxWidth: 360, alignment: .leading)
+                    Button("Prova avviso") { model.deviceAlerts.preview(settings: settings) }
+                }
+                .disabled(!settings.deviceAlerts)
+            }
         case .date:
             SettingsSection(title: "Formato") {
                 Toggle("Formato 24 ore", isOn: $settings.use24Hour)

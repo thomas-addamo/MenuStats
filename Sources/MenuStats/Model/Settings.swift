@@ -442,6 +442,9 @@ final class Settings: ObservableObject {
     @Published var calendarAlertRepeats: Int { didSet { save(calendarAlertRepeats, "calendarAlertRepeats") } }
     @Published var calendarAlertRepeatMinutes: Int { didSet { save(calendarAlertRepeatMinutes, "calendarAlertRepeatMinutes") } }
     @Published var calendarAlertAtStart: Bool { didSet { save(calendarAlertAtStart, "calendarAlertAtStart") } }
+    /// Announce in the menu bar the accessories that connect, with their battery.
+    @Published var deviceAlerts: Bool { didSet { save(deviceAlerts, "deviceAlerts") } }
+    @Published var deviceAlertSeconds: Int { didSet { save(deviceAlertSeconds, "deviceAlertSeconds") } }
     @Published var graphSeriesColors: [GraphSeries: String] {
         didSet { save(Dictionary(uniqueKeysWithValues: graphSeriesColors.map { ($0.key.rawValue, $0.value) }), "graphSeriesColors") }
     }
@@ -584,6 +587,8 @@ final class Settings: ObservableObject {
         calendarAlertRepeats = defaults.object(forKey: "calendarAlertRepeats") as? Int ?? 1
         calendarAlertRepeatMinutes = defaults.object(forKey: "calendarAlertRepeatMinutes") as? Int ?? 2
         calendarAlertAtStart = bool("calendarAlertAtStart", true)
+        deviceAlerts = bool("deviceAlerts", true)
+        deviceAlertSeconds = defaults.object(forKey: "deviceAlertSeconds") as? Int ?? 6
         let savedGraphColors = defaults.dictionary(forKey: "graphSeriesColors") as? [String: String] ?? [:]
         var graphSeries = Dictionary(uniqueKeysWithValues: GraphSeries.allCases.map { series in
             (series, savedGraphColors[series.rawValue] ?? GraphSeries.defaultColors[series]!)

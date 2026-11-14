@@ -13,6 +13,8 @@ struct EventBannerContent: Equatable {
     var progress: Double
     var color: NSColor
     var hasMeeting: Bool
+    /// A connected accessory: its icon takes the place of the countdown ring.
+    var symbol: String? = nil
 
     static func make(_ event: CalendarEvent, now: Date, use24Hour: Bool, leadMinutes: Int) -> EventBannerContent {
         let time = use24Hour ? "HH:mm" : "h:mm a"
@@ -119,7 +121,35 @@ extension MenubarRenderer {
         let titleRoom = max(min(titleWidth, bounds.width - fixed), 10)
         var x = max(bounds.width - fixed - titleRoom, 0) + 2
 
-        // Countdown ring in the calendar's color, minutes inside (a dot once the event has started).
+        if let symbol = content.symbol {
+            // A connected accessory: its icon in the battery's color.
+            drawSymbol(symbol, at: x, color: content.color)
+        } else {
+            drawRing(content, at: x)
+        }
+        x += bannerRing + bannerGap
+        drawRest(content, in: bounds, x: x, titleWidth: titleWidth, titleRoom: titleRoom, elapsed: elapsed)
+    }
+
+    /// An accessory's icon, tinted, in the room of the ring.
+    private static func drawSymbol(_ name: String, at x: CGFloat, color: NSColor) {
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium)) else { return }
+        let size = symbol.size
+        let scale = min(1, (bannerRing + 4) / max(size.width, 1))
+        let box = NSRect(x: x + (bannerRing - size.width * scale) / 2, y: (height - size.height * scale) / 2,
+                         width: size.width * scale, height: size.height * scale)
+        let tinted = NSImage(size: size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.draw(in: box)
+    }
+
+    /// Countdown ring in the calendar's color, minutes inside (a dot once the event has started).
+    private static func drawRing(_ content: EventBannerContent, at x: CGFloat) {
         let ring = NSRect(x: x, y: (height - bannerRing) / 2, width: bannerRing, height: bannerRing).insetBy(dx: 1.1, dy: 1.1)
         let track = NSBezierPath(ovalIn: ring)
         track.lineWidth = 2
@@ -142,8 +172,12 @@ extension MenubarRenderer {
             content.color.setFill()
             NSBezierPath(ovalIn: NSRect(x: ring.midX - 3, y: ring.midY - 3, width: 6, height: 6)).fill()
         }
-        x += bannerRing + bannerGap
+    }
 
+    /// Title, pill, place and video icon, from `x`.
+    private static func drawRest(_ content: EventBannerContent, in bounds: NSRect, x start: CGFloat, titleWidth: CGFloat,
+                                 titleRoom: CGFloat, elapsed: Double) {
+        var x = start
         // Title, scrolling in its own column when the room is short.
         let titleAttributes: [NSAttributedString.Key: Any] = [.font: bannerTitleFont, .foregroundColor: NSColor.labelColor]
         let title = content.title as NSString

@@ -530,8 +530,25 @@ final class StatusBarController: NSObject {
     // MARK: - Calendar announcements
 
     /// A banner being played: the modules step aside, the event takes their place, then they come back.
+    private enum Announcement: Equatable {
+        case event(CalendarEvent)
+        case device(DeviceBattery)
+
+        var id: String {
+            switch self {
+            case .event(let event): "event|" + event.id
+            case .device(let device): "device|" + device.id
+            }
+        }
+    }
+
     private struct BannerPlayback {
-        var banner: EventAlerts.Banner
+        var items: [Announcement]
+        /// Seconds each item stays on screen.
+        var slot: Double
+        /// The requests being played, handed back once done.
+        var eventBanners: [EventAlerts.Banner] = []
+        var deviceBanners: [DeviceAlerts.Banner] = []
         var start: Double
         /// The items' lengths before the announcement, restored afterwards.
         var lengths: [CGFloat]
@@ -547,41 +564,58 @@ final class StatusBarController: NSObject {
 
     private func observeAnnouncements() {
         model.eventAlerts.$pending.compactMap { $0 }.receive(on: RunLoop.main).sink { [weak self] banner in
-            self?.playBanner(banner)
+            guard let self else { return }
+            guard self.playBanner(banner.events.map(Announcement.event), slot: banner.secondsPerEvent) else {
+                return self.model.eventAlerts.finished(banner)
+            }
+            self.playback?.eventBanners.append(banner)
+        }.store(in: &cancellables)
+        model.deviceAlerts.$pending.compactMap { $0 }.receive(on: RunLoop.main).sink { [weak self] banner in
+            guard let self else { return }
+            guard self.playBanner(banner.devices.map(Announcement.device), slot: banner.secondsPerDevice) else {
+                return self.model.deviceAlerts.finished(banner)
+            }
+            self.playback?.deviceBanners.append(banner)
         }.store(in: &cancellables)
     }
 
-    private func playBanner(_ banner: EventAlerts.Banner) {
-        guard !entries.isEmpty, !banner.events.isEmpty else { model.eventAlerts.finished(banner); return }
+    /// Starts a banner, or adds the items to the one running. False when nothing can be shown.
+    @discardableResult
+    private func playBanner(_ items: [Announcement], slot: Double) -> Bool {
+        guard !entries.isEmpty, !items.isEmpty else { return false }
         if var current = playback {
-            // Already announcing: add the new events to the running banner.
-            let extra = banner.events.filter { event in !current.banner.events.contains { $0.id == event.id } }
-            current.banner.events += extra
+            // Already announcing: add the new items to the running banner.
+            current.items += items.filter { item in !current.items.contains { $0.id == item.id } }
             playback = current
-            model.eventAlerts.finished(banner)
-            return
+            return true
         }
         let lengths = entries.map { $0.item.length }
-        let contents = banner.events.map(content(for:))
+        let contents = items.map(content(for:))
         // As wide as the text wants, within the room MenuStats has (the other items fold away meanwhile).
         let available = max(lengths.reduce(0, +), measuredRoom() ?? 360)
         let width = max(lengths[0], min(MenubarRenderer.idealBannerWidth(contents) + 2, available))
-        playback = BannerPlayback(banner: banner, start: ProcessInfo.processInfo.systemUptime, lengths: lengths, width: width)
+        playback = BannerPlayback(items: items, slot: slot, start: ProcessInfo.processInfo.systemUptime, lengths: lengths, width: width)
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.renderBanner() }
         RunLoop.main.add(timer, forMode: .common)
         bannerTimer = timer
         renderBanner()
+        return true
     }
 
-    private func content(for event: CalendarEvent) -> EventBannerContent {
-        EventBannerContent.make(event, now: Date(), use24Hour: settings.use24Hour, leadMinutes: settings.calendarAlertMinutes)
+    private func content(for item: Announcement) -> EventBannerContent {
+        switch item {
+        case .event(let event):
+            EventBannerContent.make(event, now: Date(), use24Hour: settings.use24Hour, leadMinutes: settings.calendarAlertMinutes)
+        case .device(let device):
+            DeviceBannerContent.make(device)
+        }
     }
 
     private func renderBanner() {
         guard let playback else { return }
         let t = ProcessInfo.processInfo.systemUptime - playback.start
-        let events = playback.banner.events
-        let slot = playback.banner.secondsPerEvent
+        let events = playback.items
+        let slot = playback.slot
         let exitAt = playback.exitAt ?? (Self.bannerIn + Double(events.count) * slot)
         let reveal: CGFloat
         if t < Self.bannerIn {
@@ -622,7 +656,10 @@ final class StatusBarController: NSObject {
     private func finishBanner() {
         bannerTimer?.invalidate()
         bannerTimer = nil
-        if let playback { model.eventAlerts.finished(playback.banner) }
+        if let playback {
+            playback.eventBanners.forEach(model.eventAlerts.finished)
+            playback.deviceBanners.forEach(model.deviceAlerts.finished)
+        }
         playback = nil
         render()
         confirmation.layoutChanged(at: Date(), signature: layoutSignature)
@@ -633,14 +670,18 @@ final class StatusBarController: NSObject {
     private func dismissBanner(from sender: NSStatusBarButton) {
         guard var current = playback else { return }
         let t = ProcessInfo.processInfo.systemUptime - current.start
-        let slotIndex = min(Int(max(t - Self.bannerIn, 0) / current.banner.secondsPerEvent), current.banner.events.count - 1)
-        let event = current.banner.events[slotIndex]
+        let slotIndex = min(Int(max(t - Self.bannerIn, 0) / current.slot), current.items.count - 1)
+        let item = current.items[slotIndex]
         if current.exitAt == nil { current.exitAt = max(t, Self.bannerIn) }
         playback = current
-        CalendarFocus.shared.day = event.start
+        var tab = DashboardTab.battery
+        if case .event(let event) = item {
+            CalendarFocus.shared.day = event.start
+            tab = .date
+        }
         if let window = sender.window {
             let anchor = window.convertPoint(toScreen: NSPoint(x: sender.frame.midX, y: 0))
-            panel.toggle(tab: .date, anchor: NSPoint(x: anchor.x, y: window.frame.minY))
+            panel.toggle(tab: tab, anchor: NSPoint(x: anchor.x, y: window.frame.minY))
         }
     }
 

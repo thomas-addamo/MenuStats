@@ -84,4 +84,20 @@ final class DeviceBatteryTests: XCTestCase {
         XCTAssertEqual(DeviceBattery.maker(vendorID: "0x045e"), "Microsoft")
         XCTAssertNil(DeviceBattery.maker(vendorID: "0xFFFF"))
     }
+
+    func testConnectionBannerText() {
+        let airpods = DeviceBattery(name: "AirPods Pro", kind: .headphones, maker: "Apple", connection: "Bluetooth", firmware: nil,
+                                    levels: [.init(part: .left, percent: 1), .init(part: .right, percent: 0.98), .init(part: .chargingCase, percent: 0.76)])
+        XCTAssertEqual(DeviceBannerContent.batteryText(airpods), "S 100% · D 98% · custodia 76%")
+        let mouse = DeviceBattery(name: "MX Anywhere 3", kind: .mouse, maker: "Logitech", connection: "Bluetooth LE", firmware: nil,
+                                  levels: [.init(part: .main, percent: 0.15)])
+        XCTAssertEqual(DeviceBannerContent.batteryText(mouse), "collegato · 15%")
+        let content = DeviceBannerContent.make(mouse)
+        XCTAssertEqual(content.title, "MX Anywhere 3")
+        XCTAssertEqual(content.symbol, "computermouse")
+        XCTAssertEqual(content.color, .systemRed, "a low battery shows in red")
+        let keyboard = DeviceBattery(name: "K380", kind: .keyboard, maker: nil, connection: "Bluetooth", firmware: nil, levels: [])
+        XCTAssertEqual(DeviceBannerContent.batteryText(keyboard), "collegato")
+        XCTAssertEqual(DeviceAlerts.match(name: "k380", in: [mouse, keyboard])?.name, "K380")
+    }
 }

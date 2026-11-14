@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     /// The Mac's calendars (EventKit): events in the Date tab and announcements in the menu bar.
     private(set) lazy var calendar = CalendarService(settings: settings)
     let eventAlerts = EventAlerts()
+    /// Accessories announced in the menu bar when they connect (AirPods, keyboards, mice…), with their battery.
+    let deviceAlerts = DeviceAlerts()
     /// The Mac's city for the Weather module's automatic mode; idle unless that mode is on.
     let location = LocationProvider()
     /// Public IP and VPN for the Network tab; idle unless that tab is open.
@@ -76,6 +78,10 @@ final class AppModel: ObservableObject {
             .store(in: &cancellables)
         settings.$hiddenSections
             .sink { [weak self] hidden in self?.monitor.demand.hidden = hidden }
+            .store(in: &cancellables)
+        // Listening starts only when the option is on (it asks for the Bluetooth permission the first time).
+        settings.$deviceAlerts.removeDuplicates().filter { $0 }.first()
+            .sink { [weak self] _ in self?.deviceAlerts.start(settings: settings) }
             .store(in: &cancellables)
 
         // Nothing is on screen while the displays sleep or another user is active: stop sampling.

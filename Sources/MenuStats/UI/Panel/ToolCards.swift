@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -61,31 +62,119 @@ struct DeviceBatteriesCard: View {
     @StateObject private var monitor = DeviceBatteryMonitor()
 
     var body: some View {
-        Card(title: "Dispositivi collegati") {
+        Card(title: "Dispositivi collegati", trailing: monitor.devices.isEmpty ? nil : "\(monitor.devices.count)") {
             if monitor.devices.isEmpty {
-                Text(monitor.loaded ? "Nessun accessorio Bluetooth con batteria collegato (AirPods, mouse, tastiera, trackpad)."
-                                    : "Cerco gli accessori collegati…")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(monitor.devices) { device in
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(device.name, systemImage: device.symbol).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    ForEach(Array(device.levels.enumerated()), id: \.offset) { _, level in
-                        HStack(spacing: 8) {
-                            if let label = level.label {
-                                Text(label).font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 58, alignment: .leading)
-                            }
-                            UsageBar(fraction: level.percent, color: level.percent <= 0.2 ? .red : Palette.color(2), height: 5)
-                            Text(Format.percent(level.percent)).font(.system(size: 11)).monospacedDigit().frame(width: 38, alignment: .trailing)
-                        }
-                    }
+                HStack(spacing: 6) {
+                    if !monitor.loaded { ProgressView().controlSize(.small) }
+                    Text(monitor.loaded ? "Nessun accessorio collegato al Mac in questo momento." : "Cerco gli accessori collegati…")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Text("L'iPhone non condivide la batteria con il Mac: per quella usa il widget Batterie o Dov'è.")
+            ForEach(monitor.devices) { device in
+                DeviceBatteryRow(device: device)
+                if device.id != monitor.devices.last?.id { Divider().opacity(0.5) }
+            }
+            if monitor.bluetoothDenied {
+                Button { Self.openBluetoothPrivacy() } label: {
+                    Label("Consenti il Bluetooth a MenuStats per leggere la batteria di tastiere e mouse non Apple", systemImage: "exclamationmark.triangle.fill")
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(.orange)
+            }
+            Text("Si vedono tutti gli accessori collegati a questo Mac, di qualsiasi marca e account. La batteria compare quando l'accessorio la comunica: alcuni modelli Bluetooth classici e quelli con ricevitore USB non lo fanno. L'iPhone non condivide la batteria con il Mac: per quella usa il widget Batterie o Dov'è.")
                 .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { monitor.start() }
         .onDisappear { monitor.stop() }
+    }
+
+    static func openBluetoothPrivacy() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+/// One accessory: icon, name, what it is, and its battery. Earbuds get one gauge per bud and one for the case.
+struct DeviceBatteryRow: View {
+    var device: DeviceBattery
+
+    private var details: String {
+        [device.kind.label, device.maker, device.connection, device.firmware.map { "firmware \($0)" }]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 9) {
+                Image(systemName: device.symbol)
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.neutral))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(device.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text(details).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if device.levels.count == 1, let level = device.levels.first {
+                    percentLabel(level)
+                } else if device.levels.isEmpty {
+                    Text("collegato").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.color(2))
+                }
+            }
+            if device.levels.count == 1, let level = device.levels.first {
+                UsageBar(fraction: level.percent, color: Self.color(level.percent), height: 5)
+            } else if device.levels.count > 1 {
+                HStack(spacing: 8) {
+                    ForEach(device.levels, id: \.part) { level in
+                        PartGauge(level: level, symbol: device.symbol(for: level.part))
+                    }
+                }
+            } else {
+                Text("Non comunica la batteria al Mac")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+            if let lowest = device.lowest, lowest <= 0.1 {
+                Label("Batteria quasi scarica: ricaricalo presto", systemImage: "battery.0percent")
+                    .font(.system(size: 10)).foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func percentLabel(_ level: DeviceBattery.Level) -> some View {
+        HStack(spacing: 3) {
+            if level.charging == true { Image(systemName: "bolt.fill").font(.system(size: 9)).foregroundStyle(Palette.color(2)) }
+            Text(Format.percent(level.percent)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(level.percent <= 0.2 ? Color.red : Color.primary)
+        }
+    }
+
+    static func color(_ percent: Double) -> Color {
+        percent <= 0.2 ? .red : percent <= 0.4 ? .orange : Palette.color(2)
+    }
+}
+
+/// A ring with the part's icon in the middle and its percentage below: left bud, right bud, case.
+private struct PartGauge: View {
+    var level: DeviceBattery.Level
+    var symbol: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().stroke(Palette.neutral, lineWidth: 4)
+                Circle().trim(from: 0, to: CGFloat(min(max(level.percent, 0), 1)))
+                    .stroke(DeviceBatteryRow.color(level.percent), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: symbol).font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            .frame(width: 44, height: 44)
+            Text(Format.percent(level.percent)).font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+            Text(level.part.label ?? "").font(.system(size: 9.5)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .help("\(level.part.label ?? "Batteria"): \(Format.percent(level.percent))")
     }
 }
 

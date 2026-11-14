@@ -6,9 +6,11 @@ final class DeviceBatteryTests: XCTestCase {
     {"SPBluetoothDataType":[{
       "controller_properties":{"controller_state":"attrib_on"},
       "device_connected":[
-        {"AirPods Pro di Thomas":{"device_address":"AA:BB","device_batteryLevelCase":"76%","device_batteryLevelLeft":"100%",
+        {"AirPods Pro di Thomas":{"device_address":"AA:BB","device_services":"0x980019 < HFP AVRCP A2DP AACP GATT ACL >","device_batteryLevelCase":"76%","device_batteryLevelLeft":"100%",
           "device_batteryLevelRight":"98%","device_firmwareVersion":"7A305","device_minorType":"Headphones","device_vendorID":"0x004C"}},
         {"MX Keys Mini":{"device_address":"CC:DD","device_minorType":"Keyboard","device_vendorID":"0x046D","device_services":"0x400000 < BLE >"}},
+        {"AirPods nella custodia":{"device_address":"11:22","device_batteryLevelCase":"40%","device_minorType":"Headphones",
+          "device_services":"0x400000 < BLE >","device_vendorID":"0x004C"}},
         {"Mouse di Casa":{"device_address":"EE:FF","device_batteryLevelMain":"45%","device_minorType":"Mouse","device_vendorID":"0x004C"}}
       ],
       "device_not_connected":[
@@ -99,5 +101,25 @@ final class DeviceBatteryTests: XCTestCase {
         let keyboard = DeviceBattery(name: "K380", kind: .keyboard, maker: nil, connection: "Bluetooth", firmware: nil, levels: [])
         XCTAssertEqual(DeviceBannerContent.batteryText(keyboard), "collegato")
         XCTAssertEqual(DeviceAlerts.match(name: "k380", in: [mouse, keyboard])?.name, "K380")
+    }
+
+    func testDisconnectedBluetoothAccessoryLeavesTheList() {
+        // The registry can keep a Magic Mouse's battery for a moment after it disconnects: only what macOS lists as
+        // connected (or a USB cable) is shown.
+        let stale = DeviceBattery(name: "Magic Mouse", kind: .mouse, maker: "Apple", connection: "Bluetooth", firmware: nil,
+                                  levels: [.init(part: .main, percent: 0.5)])
+        XCTAssertTrue(DeviceBatteryReader.merge(profiler: [], registry: [stale], bluetoothLE: [:]).isEmpty)
+        let profilerDevices = DeviceBatteryReader.parseProfiler(Data(profiler.utf8))
+        XCTAssertFalse(DeviceBatteryReader.merge(profiler: profilerDevices, registry: [stale], bluetoothLE: [:])
+            .contains { $0.name == "Magic Mouse" })
+        XCTAssertFalse(profilerDevices.contains { $0.name == "Cuffie vecchie" }, "devices not connected are never listed")
+    }
+
+    func testAirPodsOnlyNearbyAreNotConnected() {
+        let devices = DeviceBatteryReader.parseProfiler(Data(profiler.utf8))
+        XCTAssertFalse(devices.contains { $0.name == "AirPods nella custodia" }, "a low-energy link only means the case is nearby")
+        XCTAssertTrue(DeviceBatteryReader.isReallyConnected(kind: .keyboard, services: "0x400000 < BLE >"))
+        XCTAssertFalse(DeviceBatteryReader.isReallyConnected(kind: .headphones, services: "0x400000 < BLE >"))
+        XCTAssertTrue(DeviceBatteryReader.isReallyConnected(kind: .headphones, services: "0x980019 < HFP AVRCP A2DP AACP GATT ACL >"))
     }
 }

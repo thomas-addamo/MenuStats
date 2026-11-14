@@ -3,10 +3,96 @@ import IOBluetooth
 import IOKit
 import IOKit.hid
 
+/// macOS's own signals that an accessory connected or went away: classic Bluetooth (headphones, speakers) through
+/// IOBluetooth, keyboards, mice and controllers (Bluetooth and Bluetooth LE) through the HID devices appearing and
+/// disappearing in IOKit. Nothing is polled. Shared by the menu bar announcements and the Battery tab's list.
+final class AccessoryEvents: NSObject {
+    static let shared = AccessoryEvents()
+    /// Posted on the main queue for any connection or disconnection; `userInfo["connected"]` names a new device.
+    static let changed = Notification.Name("MenuStats.accessoriesChanged")
+
+    private var started = false
+    private var bluetoothNotification: IOBluetoothUserNotification?
+    private var disconnectNotifications: [String: IOBluetoothUserNotification] = [:]
+    private var hidPort: IONotificationPortRef?
+    private var addedIterator: io_iterator_t = 0
+    private var removedIterator: io_iterator_t = 0
+    /// Devices already there when listening began: not news for the announcements.
+    private(set) var startedAt = Date()
+
+    func start() {
+        guard !started else { return }
+        started = true
+        startedAt = Date()
+        bluetoothNotification = IOBluetoothDevice.register(forConnectNotifications: self, selector: #selector(bluetoothConnected(_:device:)))
+        watchHID()
+    }
+
+    @objc private func bluetoothConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        let name = device.name ?? ""
+        if let address = device.addressString {
+            disconnectNotifications[address]?.unregister()
+            disconnectNotifications[address] = device.register(forDisconnectNotification: self,
+                                                               selector: #selector(bluetoothDisconnected(_:device:)))
+        }
+        post(connected: name.isEmpty ? nil : name)
+    }
+
+    @objc private func bluetoothDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        if let address = device.addressString { disconnectNotifications.removeValue(forKey: address)?.unregister() }
+        post(connected: nil)
+    }
+
+    private func watchHID() {
+        guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
+        hidPort = port
+        IONotificationPortSetDispatchQueue(port, DispatchQueue.main)
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        let added: IOServiceMatchingCallback = { context, iterator in
+            guard let context else { return }
+            Unmanaged<AccessoryEvents>.fromOpaque(context).takeUnretainedValue().drain(iterator, added: true)
+        }
+        let removed: IOServiceMatchingCallback = { context, iterator in
+            guard let context else { return }
+            Unmanaged<AccessoryEvents>.fromOpaque(context).takeUnretainedValue().drain(iterator, added: false)
+        }
+        if IOServiceAddMatchingNotification(port, kIOFirstMatchNotification, IOServiceMatching("IOHIDDevice"), added,
+                                            context, &addedIterator) == KERN_SUCCESS {
+            drain(addedIterator, added: true, initial: true) // arms it; these were already connected
+        }
+        if IOServiceAddMatchingNotification(port, kIOTerminatedNotification, IOServiceMatching("IOHIDDevice"), removed,
+                                            context, &removedIterator) == KERN_SUCCESS {
+            drain(removedIterator, added: false, initial: true)
+        }
+    }
+
+    private func drain(_ iterator: io_iterator_t, added: Bool, initial: Bool = false) {
+        var names: [String] = []
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            defer { IOObjectRelease(service); service = IOIteratorNext(iterator) }
+            let transport = (IORegistryEntryCreateCFProperty(service, kIOHIDTransportKey as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? String)?.lowercased() ?? ""
+            guard transport.contains("bluetooth") || transport.contains("btle") || transport.contains("usb") else { continue }
+            let name = IORegistryEntryCreateCFProperty(service, kIOHIDProductKey as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? String
+            names.append(transport.contains("usb") ? "" : (name ?? ""))
+        }
+        guard !initial, !names.isEmpty else { return }
+        if added {
+            for name in Set(names) { post(connected: name.isEmpty ? nil : name) }
+        } else {
+            post(connected: nil)
+        }
+    }
+
+    private func post(connected name: String?) {
+        NotificationCenter.default.post(name: Self.changed, object: self, userInfo: name.map { ["connected": $0] })
+    }
+}
+
 /// Announces in the menu bar the accessories that connect to the Mac (AirPods, headphones, keyboards, mice,
-/// controllers), with their battery, the same way the calendar announces events. macOS tells MenuStats when a device
-/// connects: classic Bluetooth (headphones, speakers) through IOBluetooth, keyboards, mice and controllers (Bluetooth
-/// and Bluetooth LE) through the HID devices appearing in IOKit. Nothing is polled while nothing connects.
+/// controllers), with their battery, the same way the calendar announces events.
 final class DeviceAlerts: NSObject, ObservableObject {
     struct Banner: Equatable {
         var id = UUID()
@@ -24,62 +110,27 @@ final class DeviceAlerts: NSObject, ObservableObject {
     static let batteryDelay: TimeInterval = 4
 
     private weak var settings: Settings?
-    private var startedAt = Date()
     private var lastAnnounced: [String: Date] = [:]
     private var waiting: Set<String> = []
-    private var bluetoothNotification: IOBluetoothUserNotification?
-    private var hidPort: IONotificationPortRef?
-    private var hidIterator: io_iterator_t = 0
+    private var observer: NSObjectProtocol?
     private let queue = DispatchQueue(label: "MenuStats.deviceAlerts", qos: .utility)
     private let bluetoothLE = BluetoothLEBatteryReader()
 
     func start(settings: Settings) {
         self.settings = settings
-        startedAt = Date()
-        guard bluetoothNotification == nil else { return }
-        bluetoothNotification = IOBluetoothDevice.register(forConnectNotifications: self, selector: #selector(bluetoothConnected(_:device:)))
-        watchHID()
-    }
-
-    // MARK: Sources
-
-    @objc private func bluetoothConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
-        guard let name = device.name, !name.isEmpty else { return }
-        connected(name: name)
-    }
-
-    private func watchHID() {
-        guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
-        hidPort = port
-        IONotificationPortSetDispatchQueue(port, DispatchQueue.main)
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        let callback: IOServiceMatchingCallback = { context, iterator in
-            guard let context else { return }
-            Unmanaged<DeviceAlerts>.fromOpaque(context).takeUnretainedValue().drainHID(iterator)
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: AccessoryEvents.changed, object: nil, queue: .main) { [weak self] note in
+            if let name = note.userInfo?["connected"] as? String { self?.connected(name: name) }
         }
-        guard IOServiceAddMatchingNotification(port, kIOFirstMatchNotification, IOServiceMatching("IOHIDDevice"), callback,
-                                               context, &hidIterator) == KERN_SUCCESS else { return }
-        drainHID(hidIterator) // arms the notification; these are the devices already connected
-    }
-
-    private func drainHID(_ iterator: io_iterator_t) {
-        var service = IOIteratorNext(iterator)
-        while service != 0 {
-            defer { IOObjectRelease(service); service = IOIteratorNext(iterator) }
-            let transport = (IORegistryEntryCreateCFProperty(service, kIOHIDTransportKey as CFString, kCFAllocatorDefault, 0)?
-                .takeRetainedValue() as? String)?.lowercased() ?? ""
-            guard transport.contains("bluetooth") || transport.contains("btle"),
-                  let name = IORegistryEntryCreateCFProperty(service, kIOHIDProductKey as CFString, kCFAllocatorDefault, 0)?
-                    .takeRetainedValue() as? String, !name.isEmpty else { continue }
-            connected(name: name)
-        }
+        AccessoryEvents.shared.start()
     }
 
     // MARK: Announcing
 
     /// A device connected: wait for its battery, then announce it once.
     private func connected(name: String, now: Date = Date()) {
-        guard let settings, settings.deviceAlerts, now.timeIntervalSince(startedAt) > Self.startupQuiet else { return }
+        guard let settings, settings.deviceAlerts,
+              now.timeIntervalSince(AccessoryEvents.shared.startedAt) > Self.startupQuiet else { return }
         let key = name.lowercased()
         // Both sources report the same keyboard: one announcement.
         guard !waiting.contains(key) else { return }

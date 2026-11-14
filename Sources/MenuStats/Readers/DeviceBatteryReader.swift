@@ -140,7 +140,9 @@ enum DeviceBatteryReader {
             if let index = devices.firstIndex(where: { key($0.name) == key(extra.name) }) {
                 if devices[index].levels.isEmpty { devices[index].levels = extra.levels }
                 devices[index].maker = devices[index].maker ?? extra.maker
-            } else {
+            } else if extra.connection == "USB" {
+                // A Magic accessory on its cable. Over Bluetooth only what macOS lists as connected counts: the
+                // registry can keep a battery for a moment after the accessory went away.
                 devices.append(extra)
             }
         }
@@ -194,8 +196,12 @@ enum DeviceBatteryReader {
                     }
                     let minorType = info["device_minorType"] as? String
                     let services = (info["device_services"] as? String)?.uppercased() ?? ""
+                    let kind = DeviceBattery.kind(minorType: minorType, name: name)
+                    // AirPods and Beats keep a low-energy link with the Mac while they sit in their case or nearby, and
+                    // macOS lists them as connected: they count only once they're connected for audio.
+                    if !Self.isReallyConnected(kind: kind, services: services) { continue }
                     devices.append(DeviceBattery(
-                        name: name, kind: DeviceBattery.kind(minorType: minorType, name: name),
+                        name: name, kind: kind,
                         maker: DeviceBattery.maker(vendorID: info["device_vendorID"] as? String),
                         connection: services.contains("BLE") || services.contains("LOW ENERGY") ? "Bluetooth LE" : "Bluetooth",
                         firmware: (info["device_firmwareVersion"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -204,6 +210,14 @@ enum DeviceBatteryReader {
             }
         }
         return devices
+    }
+
+    /// Headphones and speakers on the low-energy link only ("< BLE >", or "< GATT >" without ACL) aren't playing:
+    /// they're in their case or just nearby. Keyboards and mice of other makers live on LE, so for them it is enough.
+    static func isReallyConnected(kind: DeviceBattery.Kind, services: String) -> Bool {
+        guard kind == .headphones || kind == .speaker, !services.isEmpty else { return true }
+        let audio = ["ACL", "A2DP", "HFP", "AVRCP", "AACP"]
+        return audio.contains { services.contains($0) }
     }
 
     /// "85%", "85 %" or a number → 0.85.
@@ -361,19 +375,29 @@ final class BluetoothLEBatteryReader: NSObject, CBCentralManagerDelegate, CBPeri
     }
 }
 
-/// Keeps the list fresh while the Battery tab is open (once a minute).
+/// Keeps the list fresh while the Battery tab is open: at once when a device connects or disconnects, and every 30 s.
 final class DeviceBatteryMonitor: ObservableObject {
     @Published private(set) var devices: [DeviceBattery] = []
     @Published private(set) var loaded = false
     @Published private(set) var bluetoothDenied = false
     private var timer: Timer?
+    private var observer: NSObjectProtocol?
+    private var pendingRefresh: [DispatchWorkItem] = []
     private let queue = DispatchQueue(label: "MenuStats.deviceBatteries", qos: .utility)
     private static let bluetoothLE = BluetoothLEBatteryReader()
 
     func start() {
         refresh()
+        if observer == nil {
+            // A device connects or goes away: the list follows within seconds. Read twice, because AirPods and some
+            // mice give their battery a few seconds after connecting.
+            observer = NotificationCenter.default.addObserver(forName: AccessoryEvents.changed, object: nil, queue: .main) { [weak self] _ in
+                self?.refreshSoon()
+            }
+            AccessoryEvents.shared.start()
+        }
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.refresh() }
         timer.tolerance = 10
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -382,6 +406,19 @@ final class DeviceBatteryMonitor: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        pendingRefresh.forEach { $0.cancel() }
+        pendingRefresh.removeAll()
+    }
+
+    private func refreshSoon() {
+        pendingRefresh.forEach { $0.cancel() }
+        pendingRefresh = [1.5, 6].map { delay in
+            let work = DispatchWorkItem { [weak self] in self?.refresh() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            return work
+        }
     }
 
     func refresh() {
